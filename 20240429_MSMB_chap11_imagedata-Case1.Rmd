@@ -1,0 +1,255 @@
+---
+title: "Case1 - Cell Segmentation"
+output: html_document
+date: "2024-04-30"
+---
+
+## Chapter 11 - Image Data - Case 1 Cell (nuclei and bodies) Segmentation
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#BiocManager::install("genefilter")
+#Libraries
+library(EBImage)
+library(htmlwidgets)
+library(ggplot2)
+library(cba)
+library(genefilter)
+library(GGally)
+library(tibble)
+```
+
+
+### 1. Background
+- DAPI - blue-fluorescent DNA stain that exhibits ~20-fold enhancement of fluorescence upon binding to AT regions of dsDNA. It is excited by the violet (405 nm) laser line and is commonly used as a nuclear counterstai
+- FITC has excitation and emission spectrum peak wavelengths of approximately 495 nm and 519 nm, giving it a green colo
+- Cyanine3 (Cy3) is a bright, orange-fluorescent dye with excitation suited for the 532 nm laser
+```{r, echo=FALSE, fig.cap="Tubulin (green) and actin (red)", out.width = '100%'}
+knitr::include_graphics("actin_tubulin.png")
+```
+
+### 2. Import and visualization
+```{r}
+#Read images of 3 channels
+cells = readImage(system.file("images", c("image-DAPI.tif", "image-FITC.tif", "image-Cy3.tif"), package = "MSMB"))
+cells
+apply(cells, 3, range) #Check min max 
+```
+
+
+The display function expects values in the range [0, 1]. Normalize cells prior to plotting
+
+The textbook uses an approximation approach:
+cells[,,1]   = 32 * cells[,,1] #for DAPI
+cells[,,2:3] = 16 * cells[,,2:3] # for FITC and Cy3
+
+```{r}
+cells_norm <- EBImage::normalize(cells, ft=c(0,1))
+EBImage::display(cells_norm, all = TRUE, nx=numberOfFrames(cells), method = "raster")
+```
+
+
+Create an RGB stack
+```{r}
+cells_stack <- rgbImage(red=cells_norm[,,3], green=cells_norm[,,2], blue=cells_norm[,,1])
+EBImage::display(cells_stack, all = TRUE, nx=numberOfFrames(cells), method = "raster")
+```
+
+
+### 2. Image processing
+filter2 = 2D Convolution Filter
+Convolution filter - For each pixel in the image you are going to create a little square around the pixel. Lets say you take the 8 neighbors next to a pixel (including diagonals even though do not matter here), and we perform a weighted average to get the middle pixel.
+
+```{r}
+w = makeBrush(size = 51, shape = "gaussian", sigma = 7)
+nucSmooth <- filter2(getFrame(cells, 1), w)
+nucSmooth_norm <- EBImage::normalize(nucSmooth, ft=c(0,1))
+EBImage::display(nucSmooth_norm, all = TRUE, method = "raster")
+```
+
+In the Gaussian blur case it breaks down to two one dimensional operations. For each pixel take the some amount of pixels next to a pixel in the row direction only.
+
+Let’s use a sigma of 1 pixel for the DNA channel and 3 pixels for actin and tubulin.
+```{r}
+cellsSmooth_gaus = Image(dim = dim(cells))
+sigma = c(1, 3, 3)
+for(i in seq_along(sigma))
+  cellsSmooth_gaus[,,i] = filter2( cells[,,i],
+         filter = makeBrush(size = 51, shape = "gaussian",
+                            sigma = sigma[i]) )
+
+cellsSmooth_gaus_norm <- EBImage::normalize(cellsSmooth_gaus, ft=c(0,1))
+EBImage::display(cellsSmooth_gaus_norm, all = TRUE, nx=numberOfFrames(cells), method = "raster")
+```
+
+### 3. Image segmentation
+##### 3.1 Segmentation of nuclei
+
+```{r}
+disc = makeBrush(21, "disc")
+disc = disc / sum(disc)
+offset = 0.02
+
+nucThresh = (cellsSmooth_gaus_norm[,,1] - filter2(cellsSmooth_gaus_norm[,,1], disc) > offset)
+
+#Convert boolean to [0,1]
+nucThresh_num <- 1*nucThresh
+EBImage::display(nucThresh_num,  method = "raster")
+```
+
+Let us apply morphological opening to our image.
+The result of this is subtle, and you will have to zoom into the images to spot the differences, but this operation manages to smoothen out some pixel-level features in the binary images that for our application are undesirable.
+```{r}
+nucOpened = EBImage::opening(nucThresh, kern = makeBrush(5, shape = "disc"))
+
+#Convert boolean to [0,1]
+nucOpened_num <- 1*nucOpened
+EBImage::display(nucOpened_num,  method = "raster")
+
+```
+
+
+Segmentation of a binary image into objects
+bwlabel: Binary segmentation
+All pixels for each connected set of foreground (non-zero) pixels in x are set to an unique increasing integer, starting from 1. Hence, max(x) gives the number of connected objects in x.
+The function returns an image, nucSeed, of integer values, where 0 represents the background, and the numbers from 1 to 43 index the different identified objects.
+Background == 155173 pixels
+1-43 = cells with their respective pixel-size
+```{r}
+nucSeed = bwlabel(nucOpened)
+table(nucSeed)
+EBImage::display(colorLabels(nucSeed),  method = "raster")
+```
+
+
+To improve nucSeed, we can now propagate its segmented objects until they fill the mask defined by nucMask. Boundaries between nuclei, in those places where the mask is connected, can be drawn by Voronoi tessellation, which is implemented in the function propagate, and will be explained in the next section.
+
+```{r}
+nuclei = propagate(cellsSmooth_gaus[,,1], nucSeed, mask = nucOpened)
+nuclei
+EBImage::display(colorLabels(nuclei),  method = "raster")
+```
+
+
+##### 3.2 Segmentation of nuclei+cell bodies
+Visualize the intensity in logarithm scale. Why?
+This is the fact that human perception of stimuli like sound and light is not linear, but instead closer to logarithmic. Equal increments on a logrithmic scale better equate to human perception. https://www.quora.com/Why-do-we-use-a-logarithmic-scale-for-intensity
+```{r}
+hist(log(cellsSmooth_gaus[,,3]) )
+hist(log(cellsSmooth_gaus[,,3]), xlim = -c(6.4, 6.0), breaks = 300) #300bins
+```
+Looking at the these histograms for many images, we can set up the following model for the purpose of segmentation: the signal in the cytoplasmic channels of the Image cells is a mixture of two distributions, 
+- a log-Normal background and 
+- a foreground with another, unspecified, rather flat, but mostly non-overlapping distribution
+
+Moreover the majority of pixels are from the background. We can then find robust estimates for the location and width parameters of the log-Normal component from the half range mode (implemented in the package genefilter) and from the root mean square of the values that lie left of the mode.
+
+Half range mode - finding the densest half range that is an interval whose width equals half the current range, and which contains the maximal number of observations.
+
+Threshold = location of half-range + (6* width)
+The choice of the number 6 here is ad hoc; we could make the choice of threshold more objective by estimating the weights of the two mixture components and assigning each pixel to either fore- or background based on its posterior probability according to the mixture model. More advanced segmentation methods use the fact that this is really a classification problem and include additional features and more complex classifiers to separate foreground and background regions
+
+
+
+```{r}
+bgPars = function(x) {
+  x    = log(x)
+  loc  = half.range.mode( x )
+  left = (x - loc)[ x < loc ]
+  wid  = sqrt( mean(left^2) )
+  thr = loc + 6*wid
+  c(loc = loc, wid = wid, thr = thr)
+}
+cellBg = apply(cellsSmooth_gaus, MARGIN = 3, FUN = bgPars)
+cellBg
+```
+
+
+Visualize threshold 
+```{r}
+hist(log(cellsSmooth_gaus[,,3]), xlim =  -c(6.4, 6.0), breaks = 300)
+abline(v = cellBg[c("loc", "thr"), 3], col = c("brown", "red"))
+```
+
+A recap of variables (how they were computed)
+```{r}
+#nucThresh = (cellsSmooth_gaus_norm[,,1] - filter2(cellsSmooth_gaus_norm[,,1], disc) > offset)
+#nucOpened = EBImage::opening(nucThresh, kern = makeBrush(5, shape = "disc"))
+#nucSeed = bwlabel(nucOpened)
+#nuclei = propagate(cellsSmooth[,,1], nucSeed, mask = nucOpened)
+```
+
+
+```{r}
+cytoplasmMask = (cellsSmooth_gaus[,,2] > exp(cellBg["thr", 2])) |
+       nuclei | (cellsSmooth_gaus[,,3] > exp(cellBg["thr", 3]))
+cytoplasmMask
+
+
+cellbodies = propagate(x = cellsSmooth_gaus[,,3], seeds = nuclei,
+                       lambda = 1.0e-2, mask = cytoplasmMask)
+cellbodies
+```
+
+
+
+Visualize segmentation of cell bodies
+```{r}
+cellsColor = EBImage::rgbImage(red   = cells[,,3],
+                               green = cells[,,2],
+                               blue  = cells[,,1])
+nucSegOnNuc  = paintObjects(nuclei, tgt = EBImage::toRGB(cells[,,1]), col = "#ffff00")
+nucSegOnAll  = paintObjects(nuclei,     tgt = cellsColor,    col = "#ffff00")
+cellSegOnAll = paintObjects(cellbodies, tgt = nucSegOnAll,   col = "#ff0080")
+
+EBImage::display(normalize(cellsColor, ft=c(0,1)), method = 'raster')
+text(x = 10, y = 20, label = "cellsColor", adj = 0, col = "orange", cex = 1.5)
+EBImage::display(normalize(nucSegOnNuc, ft=c(0,1)), method = 'raster')
+text(x = 10, y = 20, label = "nucSegOnNuc", adj = 0, col = "orange", cex = 1.5)
+EBImage::display(normalize(nucSegOnAll, ft=c(0,1)), method = 'raster')
+text(x = 10, y = 20, label = "nucSegOnAll", adj = 0, col = "orange", cex = 1.5)
+EBImage::display(normalize(cellSegOnAll, ft=c(0,1)), method = 'raster')
+text(x = 10, y = 20, label = "cellSegOnAll", adj = 0, col = "orange", cex = 1.5)
+```
+
+
+
+### 4. Feature extraction
+```{r}
+meanNucInt       = tapply(cells[,,1], nuclei, mean)
+meanActIntInNuc  = tapply(cells[,,3], nuclei, mean)
+meanActIntInCell = tapply(cells[,,3], cellbodies, mean)
+GGally::ggpairs(tibble(meanNucInt, meanActIntInNuc, meanActIntInCell))
+```
+
+EBImage::computeFeatures- Computes morphological and texture features from image objects.
+computeFeatures.basic
+-b.mean: mean intensity
+-b.sd: standard deviation intensity
+-b.mad: mad intensity
+-b.q*: quantile intensity
+
+computeFeatures.shape
+-s.area: area size (in pixels)
+-s.perimeter: perimeter (in pixels)
+-s.radius.mean: mean radius (in pixels)
+-s.radius.sd: standard deviation of the mean radius (in pixels)
+-s.radius.max: max radius (in pixels)
+-s.radius.min: min radius (in pixels)
+
+computeFeatures.moment
+-m.cx: center of mass x (in pixels)
+-m.cy: center of mass y (in pixels)
+-m.majoraxis: elliptical fit major axis (in pixels)
+-m.eccentricity: elliptical eccentricity defined by sqrt(1-minoraxis^2/majoraxis^2). -Circle eccentricity is 0 and straight line eccentricity is 1.
+-m.theta: object angle (in radians)
+
+```{r}
+F1 = computeFeatures(nuclei,     cells[,,1], xname = "nuc",  refnames = "nuc")
+F2 = computeFeatures(cellbodies, cells[,,2], xname = "cell", refnames = "tub")
+F3 = computeFeatures(cellbodies, cells[,,3], xname = "cell", refnames = "act")
+F1[1:3, 1:5]
+```
