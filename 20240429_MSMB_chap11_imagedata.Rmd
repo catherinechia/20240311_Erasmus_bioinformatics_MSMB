@@ -1,0 +1,134 @@
+---
+title: "Image Data MSMB"
+output: html_document
+date: "2024-04-30"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Chapter 11 - Image Data
+
+1. Read, export, and visualization
+2. Inspection
+3. Image processing
+4. Case 1 - Cell segmentation - Another RMD
+5. Case 2 - Spatial analysis
+
+```{r}
+
+#packageurl <- "https://cran.r-project.org/src/contrib/xfun_0.43.tar.gz"
+#packageurl <- "https://cran.r-project.org/src/contrib/htmltools_0.5.8.1.tar.gz"
+#install.packages(packageurl, repos=NULL, type="source")
+#install.packages("htmltools")
+```
+
+```{r}
+#Libraries
+library(EBImage)
+library(htmlwidgets)
+library(ggplot2)
+library(cba)
+```
+
+### 1. Read, export, and visualization
+Supported formats https://docs.openmicroscopy.org/bio-formats/5.5.3/supported-formats.html
+```{r}
+#
+#system.file("images", package = "EBImage")
+#system.file("images", package = "MSMB")
+mosq = readImage(system.file("images", "mosquito.png", package = "MSMB"))
+hivc = readImage(system.file("images", "hiv.png", package = "MSMB"))
+nuc = readImage(system.file("images", "nuclei.tif", package = "EBImage"))
+```
+
+```{r}
+#Export read *.png to *.jpeg
+output_file = file.path(tempdir(), "hivc.jpeg")
+writeImage(hivc, output_file, quality = 85)
+```
+
+```{r}
+EBImage::display(mosq, method = "raster")
+text(x = 85, y = 800, label = "A mosquito", adj = 0, col = "orange", cex = 1.5)
+EBImage::display(hivc, method = "raster")
+EBImage::display(nuc, all = TRUE,method = "raster")
+EBImage::display(1 - nuc, all = TRUE,  method = "raster")
+```
+### 2. Inspection
+```{r}
+class(nuc) 
+class ? Image
+dim(nuc) 
+object.size(nuc) |> format(units = "Mb") #Filesize
+(object.size(nuc) / prod(dim(nuc))) |> format() |> paste("per pixel") # "8 bytes per pixel"
+
+```
+
+```{r}
+#Accessing the matrix
+nuc[1,10,4]
+imageData(nuc)[1,10,4]
+imageData(nuc)[1,10,1:4]
+hist(nuc[1,10,1:4]) #Same xy pixel across 4 channels
+```
+
+### 3. Image processing
+```{r}
+#Normalization = Intensity values linear scaling
+#https://rdrr.io/bioc/EBImage/man/normalize.html
+
+#original
+max(mosq)
+min(mosq)
+hist(mosq)
+EBImage::display(mosq, frame = 1,  method = "raster") #Plot
+
+#Normalize to 0-4
+mosq_norm = EBImage::normalize(mosq, ft=c(0,4))
+
+#Normalized
+max(mosq_norm)
+min(mosq_norm)
+hist(mosq_norm)
+EBImage::display(mosq_norm, frame = 1,  method = "raster") #Plot
+
+```
+
+
+```{r}
+#Original 
+EBImage::display(mosq, frame = 1,  method = "raster") #Plot
+text(x = 85, y = 800, label = "Original", adj = 0, col = "orange", cex = 1.5)
+
+#Transpose
+EBImage::display(EBImage::transpose(mosq), frame = 1,  method = "raster")
+text(x = 85, y = 800, label = "Transposed", adj = 0, col = "orange", cex = 1.5)
+
+#Rotate, translate, flip
+EBImage::display(EBImage::rotate(mosq, angle = 30), frame = 1,  method = "raster")
+text(x = 85, y = 800, label = "Rotated", adj = 0, col = "orange", cex = 1.5)
+EBImage::display(EBImage::translate(mosq, v = c(100, 170)), frame = 1,  method = "raster")
+text(x = 85, y = 800, label = "Translated", adj = 0, col = "orange", cex = 1.5)
+EBImage::display(EBImage::flip(mosq), frame = 1,  method = "raster")
+text(x = 85, y = 800, label = "Flipped", adj = 0, col = "orange", cex = 1.5)
+EBImage::display(EBImage::flop(mosq), frame = 1,  method = "raster")
+text(x = 85, y = 800, label = "Flopped", adj = 0, col = "orange", cex = 1.5)
+
+```
+
+
+```{r}
+#Noise reduction by smoothing
+
+#Original 
+EBImage::display(mosq, frame = 1,  method = "raster") #Plot
+text(x = 85, y = 800, label = "Original", adj = 0, col = "orange", cex = 1.5)
+
+
+w = makeBrush(size = 51, shape = "gaussian", sigma = 7)
+mosq_smooth = filter2(mosq, w)
+EBImage::display(mosq_smooth, frame = 1,  method = "raster") #Plot
+text(x = 85, y = 800, label = "Smoothen", adj = 0, col = "orange", cex = 1.5)
+```

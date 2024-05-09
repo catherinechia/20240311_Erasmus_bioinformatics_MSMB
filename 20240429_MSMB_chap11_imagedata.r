@@ -116,9 +116,10 @@ mosqflop  = flop(mosq)
 ##########
 #Image filter
 
+
 #Smoothing
 #Erode
-#Dilate
+#Dilates
 
 
 
@@ -128,6 +129,24 @@ mosqflop  = flop(mosq)
 ##################################
 mosqcrop   = mosq[100:438, 112:550]
 mosqthresh = mosq > 0.5 #data type = boolean
+
+######
+#Task
+#Our goal now is to computationally identify and quantitatively characterize the cells in these images
+#######
+imagefiles = system.file("images", c("image-DAPI.tif", "image-FITC.tif", "image-Cy3.tif"), package = "MSMB")
+cells = readImage(imagefiles)
+
+#Visualize
+EBImage::display(cells, all = TRUE,  method = "raster")
+
+#Check range (min, max)
+apply(cells, 3, range) #check dynamic range - 16bit (0-2^16) from a scanner using 2^11
+
+#Rescale 
+#Using normalize
+EBImage::normalize(cells, ft=(0,1))
+
 
 #Adaptive thresholding
 # Voronoi tessellation

@@ -1,0 +1,72 @@
+---
+title: "Case2 - Spatial statistics"
+output: html_document
+date: "2024-04-30"
+---
+
+## Chapter 11 - Image Data - Case 2 Spatial statistics
+
+A case study: Interaction between immune cells and cancer cells
+Data source: https://web.stanford.edu/class/bios221/data/
+
+This work excludes
+11.15.2 Convex hull
+11.15.3 Other ways of defining the space for the point process
+11.16 First order effects: the intensity
+11.17 Second order effects: spatial dependence
+And the exercises
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#BiocManager::install("genefilter")
+#Libraries
+library(EBImage)
+library(htmlwidgets)
+library(ggplot2)
+library(cba)
+library(genefilter)
+library(GGally)
+library(tibble)
+
+library(readr)
+library(dplyr)
+library(spatstat)
+```
+
+### 1. Import and inspection
+```{r}
+cellclasses = c("T_cells", "Tumor", "DCs", "other_cells")
+brcalymphnode = lapply(cellclasses, function(k) {
+    read_csv(file.path("data", sprintf("99_4525D-%s.txt", k))) |>
+    transmute(x = globalX, y = globalY, class = k)
+}) |> bind_rows() |> mutate(class = factor(class))
+
+brcalymphnode
+
+```
+
+```{r}
+table(brcalymphnode$class)
+```
+
+
+
+```{r}
+ggplot(filter(brcalymphnode, class %in% c("T_cells", "Tumor")),
+   aes(x = x, y = y, col = class)) + geom_point(shape = ".") +
+   facet_grid( . ~ class) + guides(col = "none")
+```
+
+convert our data in brcalymphnode into an object of class ppp; we do this by calling the eponymous function.
+ppp objects are designed to capture realizations of a spatial point process, that is, a set of isolated points located in a mathematical space;
+```{r}
+ln = with(brcalymphnode, ppp(x = x, y = y, marks = class, 
+                             xrange = range(x), yrange = range(y)))
+ln
+```
+
+
+
